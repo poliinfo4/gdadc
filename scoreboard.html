@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI城から財宝を奪おう！</title>
+<link rel="stylesheet" href="assets/jquery-ui-1.13.2/jquery-ui.min.css">
+<script src="assets/jquery-3.6.2.min.js"></script>
+<script src="assets/jquery-ui-1.13.2/jquery-ui.min.js"></script>
+<script src="assets/sha256.min.js"></script>
+<style>
+@font-face {
+  font-family: 'CP Font';
+  src: url('fonts/cpfont.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'keifont';
+  src: url('fonts/keifont.woff2') format('woff2');
+}
+</style>
+<script>
+$(function(){
+	const global = Object();
+
+	$(window).resize(function() {
+		var w = window.innerWidth - 16;
+		var h = window.innerHeight - 16;
+		var scale = Math.min(w / 1366, h / 768);
+		var x = Math.max(0, w - 1366 * scale) / 2;
+		var y = Math.max(0, h - 768 * scale) / 2;
+		$("#outer").css("width", `${w}px`);
+		$("#outer").css("height", `${h}px`);
+		$("#inner").css("transform", ``);
+		$("#inner").css("transform", `scale(${scale}) translate(${x}px, ${y}px)`);
+	});
+	$(window).resize();
+	
+	function hidePage() {
+		$("#loading").css("display", "");
+		return $("#container").animate({"opacity": 0}, {
+			"duration": 500,
+			"easing": "swing",
+			"queue": true,
+		}).promise();
+	}
+	function showPage(page) {
+		$("#container").css("opacity", 0);
+		if (typeof(page) !== "undefined") {
+			$(".pages").css("display", "none");
+			$(`.pages#${page}`).css("display", "");
+		}
+		return $("#container").delay(500).animate({"opacity": 1}, {
+			"duration": 500,
+			"easing": "swing",
+			"queue": true,
+		}).promise().then(function() {
+			$("#loading").css("display", "none");
+		});
+	}
+	
+	$("#dialog").dialog({
+		autoOpen: false, 
+		modal: true,
+		buttons: [
+			{
+				text: "OK",
+				click: function() {
+					$(this).dialog("close");
+				}
+			},
+		]
+	});
+	function showDialog(message) {
+		$("#message").text(message);
+		$("#dialog").dialog("open");
+	}
+	function request(data) {
+		var dfr = $.Deferred();
+		$.ajax({
+			// スタブ化
+			// "contentType": "application/json",
+			// "data": JSON.stringify(data),
+			// "dataType": "json",
+			// "type": "POST",
+			// "url": "./api/gdadc",
+			"type": "GET",
+			"url": "./ranking.json",
+			// スタブ化ここまで
+			"success": function(...args) { dfr.resolve(true, ...args); },
+			"error": function(...args) { dfr.resolve(false, ...args); }
+		});
+		return dfr.promise();
+	}
+	function shortName(autonym) {
+		// console.log(autonym)
+		if (autonym.length > 8) {
+			return autonym.substr(0,8)+"…";
+		};
+		return autonym;
+	}
+	function getRanking() {
+		$.when(
+			hidePage(), 
+			request({
+				"phase": "ranking",
+			})
+		).done(function(_, [result, response, textStatus, errorThrown]) {
+			if (!result) {
+				showPage("p99").then(function() {
+					showDialog("通信エラー4: ブラウザをリロードしてください (" + errorThrown + ")");
+				});
+			} else if (response) {
+				// console.log(response.names[0])
+				var names = response.names.slice();
+				var scores = response.scores.slice();
+				$("#p99t1a").text(shortName(response.names[0]));
+				$("#p99t2a").text(shortName(response.names[1]));
+				$("#p99t3a").text(shortName(response.names[2]));
+				$("#p99t4a").text(shortName(response.names[3]));
+				$("#p99t5a").text(shortName(response.names[4]));
+				$("#p99t6a").text(shortName(response.names[5]));
+				$("#p99t7a").text(shortName(response.names[6]));
+				$("#p99t8a").text(shortName(response.names[7]));
+				$("#p99t9a").text(shortName(response.names[8]));
+				$("#p99t0a").text(shortName(response.names[9]));
+				$("#p99t1b").text(response.scores[0]);
+				$("#p99t2b").text(response.scores[1]);
+				$("#p99t3b").text(response.scores[2]);
+				$("#p99t4b").text(response.scores[3]);
+				$("#p99t5b").text(response.scores[4]);
+				$("#p99t6b").text(response.scores[5]);
+				$("#p99t7b").text(response.scores[6]);
+				$("#p99t8b").text(response.scores[7]);
+				$("#p99t9b").text(response.scores[8]);
+				$("#p99t0b").text(response.scores[9]);
+				showPage("p99");
+			}
+		});
+	}
+	
+	
+	
+	$(".pages").css("display", "none");
+	$("#container").css("display", "");
+	getRanking();
+});
+</script>
+</head>
+<body>
+<div id="dialog" title="メッセージ"><p id="message"></p></div>
+
+<div id="outer" style="overflow: hidden">
+<div id="inner" style="transform-origin: top left; width: 1366px; height: 768px; background-color: #000000">
+<span id="loading" style="font-family: 'CP Font'; left: 363px; top: 348px; width: 640px; height: 72px; color: #666666; font-size: 24px; text-align: center; position: absolute">ロード中...</span>
+<div id="container" style="display: none; width: 100%; height: 100%; background-color: #000000">
+
+<!-- リーダーボード -->
+<div class="pages" id="p99" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate_bw.svg" style="left: 187px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/treasure.svg" style="left: 405px; top: 30px; width: 96px; height: 91px; position: absolute">
+<img src="images/treasure.svg" style="left: 865px; top: 30px; width: 96px; height: 91px; position: absolute; transform: scale(-1, 1)">
+<span style="font-family: 'CP Font'; left: 283px; top: 37px; width: 800px; height: 39px; color: #f5df04; font-size: 64px; text-align: center; position: absolute">ランキング</span>
+<span style="font-family: 'keifont'; left: 40px; top: 130px; width: 1286px; height: 53px; color: #ffff10; font-size: 80px; text-align: center; position: absolute">1st <span id="p99t1a"></span>  <span id="p99t1b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 220px; width: 1286px; height: 53px; color: #f0f0ff; font-size: 64px; text-align: center; position: absolute">2nd <span id="p99t2a"></span>  <span id="p99t2b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 290px; width: 1286px; height: 53px; color: #ff6666; font-size: 56px; text-align: center; position: absolute">3rd <span id="p99t3a"></span>  <span id="p99t3b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 360px; width: 1286px; height: 53px; color: #66cc66; font-size: 40px; text-align: center; position: absolute">4th <span id="p99t4a"></span>  <span id="p99t4b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 410px; width: 1286px; height: 53px; color: #66cc66; font-size: 40px; text-align: center; position: absolute">5th <span id="p99t5a"></span>  <span id="p99t5b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 460px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">6th <span id="p99t6a"></span>  <span id="p99t6b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 500px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">7th <span id="p99t7a"></span>  <span id="p99t7b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 540px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">8th <span id="p99t8a"></span>  <span id="p99t8b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 580px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">9th .<span id="p99t9a"></span>  <span id="p99t9b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 620px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">10th <span id="p99t0a"></span>  <span id="p99t0b">0</span>G</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<!--span id="p99b1" style="font-family: 'CP Font'; left: 603px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">タイトル</span-->
+</div>
+
+</div>
+</div>
+</div>
+</body>
+</html>

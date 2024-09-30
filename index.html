@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI城から財宝を奪おう！</title>
+<link rel="stylesheet" href="assets/jquery-ui-1.13.2/jquery-ui.min.css">
+<script src="assets/jquery-3.6.2.min.js"></script>
+<script src="assets/jquery-ui-1.13.2/jquery-ui.min.js"></script>
+<script src="assets/sha256.min.js"></script>
+<style>
+@font-face {
+  font-family: 'CP Font';
+  src: url('fonts/cpfont.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'keifont';
+  src: url('fonts/keifont.woff2') format('woff2');
+}
+</style>
+<script>
+$(function(){
+	const global = Object();
+
+	$(window).resize(function() {
+		var w = window.innerWidth - 16;
+		var h = window.innerHeight - 16;
+		var scale = Math.min(w / 1366, h / 768);
+		var x = Math.max(0, w - 1366 * scale) / 2;
+		var y = Math.max(0, h - 768 * scale) / 2;
+		$("#outer").css("width", `${w}px`);
+		$("#outer").css("height", `${h}px`);
+		$("#inner").css("transform", ``);
+		$("#inner").css("transform", `scale(${scale}) translate(${x}px, ${y}px)`);
+	});
+	$(window).resize();
+	
+	function hidePage() {
+		$("#loading").css("display", "");
+		return $("#container").animate({"opacity": 0}, {
+			"duration": 500,
+			"easing": "swing",
+			"queue": true,
+		}).promise();
+	}
+	function showPage(page) {
+		$("#container").css("opacity", 0);
+		if (typeof(page) !== "undefined") {
+			$(".pages").css("display", "none");
+			$(`.pages#${page}`).css("display", "");
+		}
+		return $("#container").delay(500).animate({"opacity": 1}, {
+			"duration": 500,
+			"easing": "swing",
+			"queue": true,
+		}).promise().then(function() {
+			$("#loading").css("display", "none");
+		});
+	}
+	
+	$("#dialog").dialog({
+		autoOpen: false, 
+		modal: true,
+		buttons: [
+			{
+				text: "OK",
+				click: function() {
+					$(this).dialog("close");
+				}
+			},
+		]
+	});
+	function showDialog(message) {
+		$("#message").text(message);
+		$("#dialog").dialog("open");
+	}
+	
+	// スタブ化
+	$.ajax({
+		"type": "GET",
+		"url": "./B1.json",
+		"success": function(response, dataType) {
+			global.questions = response;
+		},
+		"error": function(response, textStatus, errorThrown) {
+			showDialog("通信エラー: ブラウザをリロードしてください (" + errorThrown + ")");
+		}
+	});
+	$.ajax({
+		"type": "GET",
+		"url": "./ranking.json",
+		"success": function(response, dataType) {
+			global.ranking_data = response;
+		},
+		"error": function(response, textStatus, errorThrown) {
+			showDialog("通信エラー: ブラウザをリロードしてください (" + errorThrown + ")");
+		}
+	});
+	global.submitted_summaries = new Array();
+	
+	function getQuestionInfo(question_id) {
+		const question = global.questions[question_id];
+		return {
+			"classifier_id": 0,
+			"question_id": question_id,
+			"question_summary": question.SubTopic + "について、" + question.QuestionSummary,
+			"answer_original": question.AnswerOriginal,
+			"answer_summary": question.AnswerSummary,
+			"min_length": Math.max(10, Math.round(question.AnswerSummary.length * 0.5 / 10) * 10),
+			"max_length": Math.max(40, Math.round(question.AnswerSummary.length * 1.5 / 10) * 10),
+		};
+	}
+	function setupQuestion() {
+		const question_info = getQuestionInfo(Math.floor(Math.random() * global.questions.length));
+		return {
+			"loggedin": true,
+			// "current_score": 0,
+			...question_info,
+		};
+	}
+	function evaluateAnswer(question_id, generated_summary) {
+		const question_info = getQuestionInfo(question_id);
+		var reason = null;
+		var income = 0;
+		if (generated_summary === question_info.answer_summary) {
+			reason = "gold_answer";
+		} else if (global.submitted_summaries.includes(question_info.answer_summary + generated_summary)) {
+			reason = "known_answer";
+		} else if (generated_summary.length < question_info.min_length) {
+			reason = "too_short";
+		} else if (generated_summary.length > question_info.max_length) {
+			reason = "too_long";
+		} else {
+			global.submitted_summaries.push(question_info.answer_summary + generated_summary);
+			// 本番はモデルの出力と正答との距離の積和で決めていたが、デモでは適当にスコアを決める
+			income = parseInt(sha256(question_info.answer_summary + generated_summary).substr(-8), 16) % 1000
+		}
+		return {
+			"loggedin": true,
+			// "current_score": 0,
+			"income": income,
+			"reason": reason,
+		};
+	}
+	function request(data) {
+		console.log(data);
+		var response = null;
+		if (data.phase === "ranking") {
+			response = global.ranking_data;
+		} else if ("generated_summary" in data) {
+			response = evaluateAnswer(data.question_id, data.generated_summary);
+		} else {
+			response = setupQuestion();
+		}
+		return new Promise(function(resolve, reject) { resolve([true, response, null, null]); });
+	}
+	// スタブ化ここまで
+	function __request(data) {	// スタブ化
+		var dfr = $.Deferred();
+		$.ajax({
+			"contentType": "application/json",
+			"data": JSON.stringify(data),
+			"dataType": "json",
+			"type": "POST",
+			"url": "./api/gdadc",
+			"success": function(...args) { dfr.resolve(true, ...args); },
+			"error": function(...args) { dfr.resolve(false, ...args); }
+		});
+		return dfr.promise();
+	}
+	function nextQuestion(next_page, phase) {
+		$.when(
+			hidePage(), 
+			request({
+				"user_id": global.user_id,
+				"password": global.password,
+			})
+		).done(function(_, [result, response, textStatus, errorThrown]) {
+			if (!result) {
+				showPage().then(function() {
+					showDialog("通信エラー１: ブラウザをリロードしてください (" + errorThrown + ")");
+				});
+			} else if (response && response.loggedin) {
+				// console.log(response.answer_summary);
+
+				global.classifier_id = response.classifier_id;
+				global.question_id = response.question_id;
+				global.answer_summary = response.answer_summary;
+				
+				global.question_summary = response.question_summary
+				global.answer_original = response.answer_original;
+				global.min_length = response.min_length
+				global.max_length = response.max_length
+				global.current_score = response.current_score ?? global.current_score ?? 0;
+				
+				$("#p3f1").val(response.question_summary);
+				$("#p3f2").val("");
+				$("#p3f2").keyup()
+				$("#p3f3").val(response.answer_original);
+				$("#p3t1").text(response.min_length);
+				$("#p3t2").text(response.max_length);
+				$("#p3t3").text(response.current_score ? response.current_score : global.current_score);
+				
+				showPage(next_page);
+			} else {
+				showPage("p1").then(function() {
+					showDialog("パスワードが正しくないようです");
+				});
+			}
+		});
+	}
+	function submitAnswer(generated_summary) {
+		$.when(
+			hidePage(), 
+			request({
+				"user_id": global.user_id,
+				"password": global.password,
+				"classifier_id": global.classifier_id,
+				"question_id": global.question_id,
+				"generated_summary": generated_summary,
+			})
+		).done(function(_, [result, response, textStatus, errorThrown]) {
+			if (!result) {
+				showPage().then(function() {
+					showDialog("通信エラー２: ブラウザをリロードしてください (" + errorThrown + ")");
+				});
+			} else if (response && response.loggedin) {
+				global.income = response.income;
+				global.current_score = response.current_score ?? (global.current_score + response.income);
+				$("#p3t3").text(global.current_score);
+				
+				if (response.reason === "gold_answer" || response.reason === "known_answer") {
+					$("#p5t2, #p6t2, #p7t2, #p8t2").text("ソレハキイタコトガアルゾ");
+				} else if (response.reason === "too_short") {
+					$("#p5t2, #p6t2, #p7t2, #p8t2").text("コタエガミジカスギルゾ");
+				} else if (response.reason === "too_long") {
+					$("#p5t2, #p6t2, #p7t2, #p8t2").text("コタエガナガスギルゾ");
+				} else if (response.income === 0) {
+					$("#p5t2, #p6t2, #p7t2, #p8t2").text("ソンナウソニハダマサレナイゾ");
+				} else if (response.income < 200) {
+					$("#p5t2, #p6t2, #p7t2, #p8t2").text("イヤ…ナニカオカシイゾ");
+				} else if (response.income < 500) {
+					$("#p5t2, #p6t2, #p7t2, #p8t2").text("ダマサレルトコロダッタゾ");
+				} else {
+					$("#p5t2, #p6t2, #p7t2, #p8t2").text("ヤ、ヤラレタ…");
+				}
+				$("#p4t1, #p5t1, #p6t1, #p7t1, #p8t1").text(response.income);
+				if (response.income >= 800) {
+					global.sneak_result = "大成功!!"
+					showPage("p4");
+				} else if (response.income >= 500) {
+					global.sneak_result = "成功！"
+					showPage("p5");
+				} else if (response.income >= 200) {
+					global.sneak_result = "微妙…"
+					showPage("p6");
+				} else if (response.income > 0) {
+					global.sneak_result = "失敗！"
+					showPage("p7");
+				} else {
+					global.sneak_result = "大失敗!!"
+					showPage("p8");
+				}
+			} else {
+				showPage("p1").then(function() {
+					showDialog("パスワードが正しくないようです");
+				});
+			}
+		});
+	}
+	function shortName(autonym) {
+		// console.log(autonym)
+		if (autonym.length > 8) {
+			return autonym.substr(0,8)+"…";
+		};
+		return autonym;
+	}
+	function getRanking() {
+		$.when(
+			hidePage(), 
+			request({
+				"phase": "ranking",
+			})
+		).done(function(_, [result, response, textStatus, errorThrown]) {
+			if (!result) {
+				showPage().then(function() {
+					showDialog("通信エラー4: ブラウザをリロードしてください (" + errorThrown + ")");
+				});
+			} else if (response) {
+				// console.log(response.names[0])
+				var names = response.names.slice();
+				var scores = response.scores.slice();
+				$("#p99t1a").text(shortName(response.names[0]));
+				$("#p99t2a").text(shortName(response.names[1]));
+				$("#p99t3a").text(shortName(response.names[2]));
+				$("#p99t4a").text(shortName(response.names[3]));
+				$("#p99t5a").text(shortName(response.names[4]));
+				$("#p99t6a").text(shortName(response.names[5]));
+				$("#p99t7a").text(shortName(response.names[6]));
+				$("#p99t8a").text(shortName(response.names[7]));
+				$("#p99t9a").text(shortName(response.names[8]));
+				$("#p99t0a").text(shortName(response.names[9]));
+				$("#p99t1b").text(response.scores[0]);
+				$("#p99t2b").text(response.scores[1]);
+				$("#p99t3b").text(response.scores[2]);
+				$("#p99t4b").text(response.scores[3]);
+				$("#p99t5b").text(response.scores[4]);
+				$("#p99t6b").text(response.scores[5]);
+				$("#p99t7b").text(response.scores[6]);
+				$("#p99t8b").text(response.scores[7]);
+				$("#p99t9b").text(response.scores[8]);
+				$("#p99t0b").text(response.scores[9]);
+				showPage("p99");
+			}
+		});
+	}
+	
+	// 表紙
+	if (0) // スタブ化
+	$("#p1b1").on("click", function() {
+		var user_id = $("#p1f1").val();
+		var password = $("#p1f2").val();
+		if (!user_id.length) {
+			showDialog("名前が入力されていません");
+			return;
+		}
+		if (!password.length) {
+			showDialog("パスワードが入力されていません");
+			return;
+		}
+		try {
+			localStorage.setItem("user_id", user_id);
+		} catch(e) {}
+		global.user_id = user_id;
+		global.password = sha256(password);
+		nextQuestion("p9", "title");
+	});
+	$("#p1b2").on("click", function() {
+		var user_id = "__anonymous__";
+		var password = "__password__";
+		global.user_id = user_id;
+		global.password = sha256(password);
+		nextQuestion("p9", "title");
+	});
+	$("#p1b3").on("click", function() {
+		hidePage().then(function() {
+			getRanking();
+		});
+	});
+	$("#p1b4").on("click", function() {
+		var url = "https://sites.google.com/view/poliinfo4/game";
+		window.open(url, "_blank");
+	});
+	
+	// お試し確認
+	$("#p10b1").on("click", function() {
+		hidePage().then(function() {
+			showPage("p9");
+		});
+	});
+	$("#p10b2").on("click", function() {
+		hidePage().then(function() {
+			showPage("p1");
+		});
+	});
+	
+	// 同意画面
+	$("#p9b1").on("click", function() {
+		hidePage().then(function() {
+			showPage("p2");
+		});
+	});
+	
+	// ルール説明
+	$("#p2b1").on("click", function() {
+		hidePage().then(function() {
+			showPage("p3");
+		});
+	});
+	
+	// フェイクデータを入力
+	$("#p3f2").on("change keyup paste", function() {
+		var count = $("#p3f2").val().length;
+		$("#p3b1").css("display", (global.min_length <= count && count <= global.max_length) ? "flex" : "none");
+		$("#p3t4").text(count);
+	});
+	$("#p3b1").on("click", function() {
+		var generated_summary = $("#p3f2").val();
+		submitAnswer(generated_summary);
+	});
+	
+	// 騙せた・騙せなかった
+	$("#p4b1, #p5b1, #p6b1, #p7b1, #p8b1").on("click", function() {
+		hidePage().then(function() {
+			showPage("p3");
+		});
+	});
+	$("#p4b2, #p5b2, #p6b2, #p7b2, #p8b2").on("click", function() {
+		nextQuestion("p3", "sneak");
+	});
+	$("#p4b3, #p5b3, #p6b3, #p7b3, #p8b3").on("click", function() {
+		var url = "https://twitter.com/share?url=https://sites.google.com/view/poliinfo4/game&via=NTCIRQALabJA&related=NTCIRQALabJA&hashtags=NTCIRQALabJA,AI城から財宝を奪おう！&text=『AI城から財宝を奪おう!』今回獲得した財宝は…"+global.income+"G! ――"+global.sneak_result;
+		window.open(url, "_blank");
+	});
+	
+	//リーダーボード
+	$("#p99b1").on("click", function() {
+		hidePage().then(function() {
+			showPage("p1");
+		});
+	});	
+	
+	if (0) // スタブ化
+	try {
+		var user_id = localStorage.getItem("user_id");
+		if (user_id !== null) {
+			$("#p1f1").val(user_id);
+		}
+	} catch(e) {}
+	$(".pages").css("display", "none");
+	$("#container").css("display", "");
+	showPage("p1");
+});
+</script>
+</head>
+<body>
+<div id="dialog" title="メッセージ"><p id="message"></p></div>
+
+<div id="outer" style="overflow: hidden">
+<div id="inner" style="transform-origin: top left; width: 1366px; height: 768px; background-color: #000000">
+<span id="loading" style="font-family: 'CP Font'; left: 363px; top: 348px; width: 640px; height: 72px; color: #666666; font-size: 24px; text-align: center; position: absolute">ロード中...</span>
+<div id="container" style="display: none; width: 100%; height: 100%; background-color: #000000">
+
+<!-- 表紙 -->
+<div class="pages" id="p1" style="width: 100%; height: 100%; position: relative">
+<img src="images/castle.svg" style="left: 684px; top: 194px; width: 608px; height: 386px; position: absolute">
+<span style="font-family: 'keifont'; left: 64px; top: 600px; width: 550px; height: 98px; color: #666666; font-size: 40px; text-align: center; position: absolute">QA Lab-PoliInfo-4<br>Answer Verificationタスク</span>
+<span style="font-family: 'CP Font'; left: 10px; top: 80px; width: 650px; height: 180px; color: #f5df04; font-size: 82px; text-align: center; position: absolute">AI城から財宝を<br>奪おう！</span>
+<span style="font-family: 'CP Font'; left: 64px; top: 372px; width: 160px; height: 39px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">名前を入力</span>
+<span style="font-family: 'CP Font'; left: 64px; top: 458px; width: 160px; height: 39px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">パスワード</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<!-- スタブ化
+<input id="p1f1" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 247px; top: 353px; width: 345px; height: 62px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px"></input>
+<input id="p1f2" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 247px; top: 439px; width: 345px; height: 62px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px" type="password"></input>
+<span id="p1b1" style="font-family: 'CP Font'; left: 1148px; top: 648px; width: 160px; height: 60px; color: #f5df04; font-size: 36px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">ログイン</span>
+-->
+<input id="p1f1" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 247px; top: 353px; width: 345px; height: 62px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px" readonly></input>
+<input id="p1f2" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 247px; top: 439px; width: 345px; height: 62px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px" type="password" readonly></input>
+<span id="p1b1" style="font-family: 'CP Font'; left: 1148px; top: 648px; width: 160px; height: 60px; color: #9d9d9d; font-size: 36px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #585858; border: solid #ffffff; border-radius: 10px; cursor: not-allowed">ログイン</span>
+<!-- スタブ化ここまで -->
+<span id="p1b2" style="font-family: 'CP Font'; left: 988px; top: 668px; width: 120px; height: 40px; color: #f5df04; font-size: 24px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">お試し</span>
+<span style="font-family: 'keifont'; left: 64px; top: 700px; width: 550px; height: 98px; color: #666666; font-size: 24px; text-align: center; position: absolute">お問い合わせは<a href="https://forms.gle/ttnY2iCjiA3UdCqN8" target="_blank">こちら</a>にどうぞ</span>
+<span id="p1b3" style="font-family: 'CP Font'; left: 1036px; top: 20px; width: 160px; height: 40px; color: #f5df04; font-size: 24px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">ランキング</span>
+<span id="p1b4" style="font-family: 'CP Font'; left: 1236px; top: 20px; width: 100px; height: 40px; color: #f5df04; font-size: 24px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">遊び方</span>
+</div>
+
+<!-- 同意画面 -->
+<div class="pages" id="p9" style="width: 100%; height: 100%; position: relative">
+<span style="font-family: 'CP Font'; left: 208px; top: 80px; width: 950px; height: 39px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">本ゲーム「AI城から財宝を奪おう!」をプレイする前に、<br>プレイヤーは以下の項目に同意する必要があります。</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<!-- スタブ化
+<textarea id="p9f1" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 208px; top: 170px; width: 950px; height: 434px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px; resize: none" readonly>・プレイ開始時に入力した「名前」は、ゲーム内のリーダーボード（順位表）画面で、他のプレイヤーに表示されることがあります。なお、ここで入力する名前は、他のプレイヤーと重複しないかつ公序良俗に反しない文字列である限りにおいて、任意の文字列とすることができます。
+・プレイヤーがゲームプレイ中に入力した文字列と操作内容は、NTCIR-17 QA Lab-PoliInfo-4タスクオーガナイザーが学術研究、並びにゲーム内容の改善のために分析・利用すること、学術研究の成果としてプレイヤー名の記載なく発表すること、ならびに（あるいは）評価型ワークショップ（NTCIR-17 QA Lab-PoliInfo-4を含みますが、これに限りません）の参加者にプレイヤー名の記載なく配布することがあります。プレイヤーは、ゲームプレイ中に入力するあらゆる文字列について、当該文字列の著作権をNTCIR-17 QA Lab-PoliInfo-4タスクオーガナイザーに無償にて譲渡すること、ならびに当該文字列に関する著作者人格権を行使しないことに同意します。</textarea>
+-->
+<textarea id="p9f1" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 208px; top: 170px; width: 950px; height: 434px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px; resize: none" readonly>・「AI城から財宝を奪おう！」の公開は終了しました。現在もゲームで遊ぶことはできますが、AIはランダムな反応をするだけで、入力されたデータが送信されたり記録されたりすることはありません。</textarea>
+<!-- スタブ化ここまで -->
+<span id="p9b1" style="font-family: 'CP Font'; left: 603px; top: 648px; width: 160px; height: 60px; color: #f5df04; font-size: 36px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">同意する</span>
+</div>
+
+<!-- お試し確認 -->
+<div class="pages" id="p10" style="width: 100%; height: 100%; position: relative">
+<span style="font-family: 'CP Font'; left: 208px; top: 100px; width: 950px; height: 39px; color: #ff0505; font-size: 124px; text-align: center; position: absolute">！注意！</span>
+<span style="font-family: 'CP Font'; left: 258px; top: 300px; width: 850px; height: 39px; color: #ffffff; font-size: 33px; text-align: center; position: absolute">お試しモードでは、スコア（獲得したゴールド）は記録されません。今回の結果を引き継いでゲームするためには、タイトルに戻ってログインしなおしてください。</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p10b1" style="font-family: 'CP Font'; left: 503px; top: 548px; width: 160px; height: 60px; color: #f5df04; font-size: 24px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">お試しモード</span>
+<span id="p10b2" style="font-family: 'CP Font'; left: 703px; top: 548px; width: 160px; height: 60px; color: #f5df04; font-size: 24px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">タイトルへ</span>
+</div>
+
+<!-- ルール説明 -->
+<div class="pages" id="p2" style="width: 100%; height: 100%; position: relative">
+<img src="images/treasure.svg" style="left: 100px; top: 474px; width: 233px; height: 220px; position: absolute">
+<span style="font-family: 'keifont'; left: 237px; top: 224px; width: 950px; height: 322px; color: #ffffff; font-size: 33px; text-align: center; position: absolute">あなたはお城のお宝を狙う詐欺師です<br>王様は城の宝物庫をロボットに警備させています<br><br>ロボットの質問にフェイク（正しそうに見える嘘）で答えると<br>ロボットは混乱して少しの間警備が疎かになります<br><br>ロボットに嘘を見破られてはいけません<br>たくさん騙してお宝をいただきましょう</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p2b1" style="font-family: 'CP Font'; left: 1148px; top: 648px; width: 160px; height: 60px; color: #f5df04; font-size: 36px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">次へ</span>
+</div>
+
+<!-- フェイクデータを入力 -->
+<div class="pages" id="p3" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate_bw.svg" style="left: 160px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/robo1.svg" style="left: 80px; top: 45px; width: 80px; height: 127px; position: absolute">
+<span style="font-family: 'keifont'; left: 5px; top: 217px; width: 240px; height: 67px; color: #ffffff; font-size: 33px; text-align: center; position: absolute">ロボットを<br>騙そう！</span>
+<span style="font-family: 'keifont'; left: 5px; top: 292px; width: 240px; height: 24px; color: #cccccc; font-size: 30px; text-align: center; position: absolute">[<span id="p3t1">0</span>-<span id="p3t2">0</span>字]</span>
+<span style="font-family: 'keifont'; left: 704px; top: 601px; width: 600px; height: 67px; color: #ffffff; font-size: 24px; text-align: right; position: absolute">現在の文字数：<span id="p3t4">0</span>字</span>
+<span style="font-family: 'keifont'; left: 480px; top: 657px; width: 600px; height: 67px; color: #ffffff; font-size: 33px; text-align: right; position: absolute">これまでに奪ったお宝：<span id="p3t3">0</span>G</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<textarea id="p3f1" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 241px; top: 60px; width: 1063px; height: 91px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px; resize: none" readonly></textarea>
+<textarea id="p3f2" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 241px; top: 490px; width: 1063px; height: 91px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ff0000; border-radius: 10px; resize: none"></textarea>
+<textarea id="p3f3" style="font-family:'メイリオ', 'Meiryo', 'ＭＳ ゴシック', 'Hiragino Kaku Gothic ProN', 'ヒラギノ角ゴ ProN W3' ,sans-serif; left: 241px; top: 217px; width: 1063px; height: 247px; color: #000000; font-size: 24px; text-align: left; position: absolute; border: solid #ffffff; border-radius: 10px; resize: none" readonly></textarea>
+<span id="p3b2" style="font-family: 'CP Font'; left: 1148px; top: 648px; width: 160px; height: 60px; color: #9d9d9d; font-size: 36px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #585858; border: solid #ffffff; border-radius: 10px; cursor: not-allowed">次へ</span>
+<span id="p3b1" style="font-family: 'CP Font'; left: 1148px; top: 648px; width: 160px; height: 60px; color: #f5df04; font-size: 36px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">次へ</span>
+</div>
+
+<!-- すごく騙せた over 800G -->
+<div class="pages" id="p4" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate.svg" style="left: 187px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/robo1.svg" style="left: 182px; top: 468px; width: 80px; height: 127px; position: absolute; transform: rotate(-60deg)">
+<img src="images/treasure.svg" style="left: 589px; top: 229px; width: 192px; height: 182px; position: absolute">
+<img src="images/treasure.svg" style="left: 489px; top: 329px; width: 192px; height: 182px; position: absolute">
+<img src="images/treasure.svg" style="left: 689px; top: 329px; width: 192px; height: 182px; position: absolute">
+<img src="images/treasure.svg" style="left: 389px; top: 429px; width: 192px; height: 182px; position: absolute">
+<img src="images/treasure.svg" style="left: 589px; top: 429px; width: 192px; height: 182px; position: absolute">
+<img src="images/treasure.svg" style="left: 789px; top: 429px; width: 192px; height: 182px; position: absolute">
+<img src="images/smoke.svg" style="left: 242px; top: 251px; width: 211px; height: 237px; position: absolute">
+<span style="font-family: 'CP Font'; left: 363px; top: 37px; width: 640px; height: 39px; color: #f5df04; font-size: 128px; text-align: center; position: absolute">大成功!!</span>
+<span style="font-family: 'keifont'; left: 400px; top: 185px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"><span id="p4t1">800</span>G獲得した！</span>
+<span style="font-family: 'keifont'; left: 438px; top: 639px; width: 500px; height: 77px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">もう一度同じロボットを騙しますか？</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p4b1" style="font-family: 'CP Font'; left: 508px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">やり直す</span>
+<span id="p4b2" style="font-family: 'CP Font'; left: 708px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">次へ</span>
+<span id="p4b3" style="font-family: 'CP Font'; left: 1008px; top: 634px; width: 160px; height: 92px; color: #ffffff; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #00acee; border: solid #ffffff; border-radius: 10px; cursor: pointer">Twitterで共有</span>
+</div>
+
+<!-- 騙せた 500-799G -->
+<div class="pages" id="p5" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate.svg" style="left: 187px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/robo1.svg" style="left: 182px; top: 468px; width: 80px; height: 127px; position: absolute; transform: rotate(-60deg)">
+<img src="images/treasure.svg" style="left: 589px; top: 299px; width: 192px; height: 182px; position: absolute">
+<img src="images/treasure.svg" style="left: 489px; top: 399px; width: 192px; height: 182px; position: absolute">
+<img src="images/treasure.svg" style="left: 689px; top: 399px; width: 192px; height: 182px; position: absolute">
+<img src="images/smoke.svg" style="left: 242px; top: 251px; width: 211px; height: 237px; position: absolute">
+<span style="font-family: 'CP Font'; left: 363px; top: 37px; width: 640px; height: 39px; color: #f5df04; font-size: 128px; text-align: center; position: absolute">成功！</span>
+<span style="font-family: 'keifont'; left: 400px; top: 185px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"><span id="p5t1">500</span>G獲得した！</span>
+<span id="p5t2" style="font-family: 'keifont'; left: 400px; top: 245px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"></span>
+<span style="font-family: 'keifont'; left: 438px; top: 639px; width: 500px; height: 77px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">もう一度同じロボットを騙しますか？</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p5b1" style="font-family: 'CP Font'; left: 508px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">やり直す</span>
+<span id="p5b2" style="font-family: 'CP Font'; left: 708px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">次へ</span>
+<span id="p5b3" style="font-family: 'CP Font'; left: 1008px; top: 634px; width: 160px; height: 92px; color: #ffffff; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #00acee; border: solid #ffffff; border-radius: 10px; cursor: pointer">Twitterで共有</span>
+</div>
+
+<!-- やや騙せた 200-499G -->
+<div class="pages" id="p6" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate.svg" style="left: 187px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/robo1.svg" style="left: 182px; top: 468px; width: 80px; height: 127px; position: absolute; transform: rotate(-60deg)">
+<img src="images/treasure.svg" style="left: 589px; top: 369px; width: 192px; height: 182px; position: absolute">
+<img src="images/smoke.svg" style="left: 242px; top: 251px; width: 211px; height: 237px; position: absolute">
+<span style="font-family: 'CP Font'; left: 363px; top: 37px; width: 640px; height: 39px; color: #d0d0d0; font-size: 128px; text-align: center; position: absolute">微妙…</span>
+<span style="font-family: 'keifont'; left: 400px; top: 185px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"><span id="p6t1">200</span>G獲得した！</span>
+<span id="p6t2" style="font-family: 'keifont'; left: 400px; top: 245px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"></span>
+<span style="font-family: 'keifont'; left: 438px; top: 639px; width: 500px; height: 77px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">もう一度同じロボットを騙しますか？</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p6b1" style="font-family: 'CP Font'; left: 508px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">やり直す</span>
+<span id="p6b2" style="font-family: 'CP Font'; left: 708px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">次へ</span>
+<span id="p6b3" style="font-family: 'CP Font'; left: 1008px; top: 634px; width: 160px; height: 92px; color: #ffffff; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #00acee; border: solid #ffffff; border-radius: 10px; cursor: pointer">Twitterで共有</span>
+</div>
+
+<!-- あまり騙せなかった 1-199G -->
+<div class="pages" id="p7" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate.svg" style="left: 187px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/treasure.svg" style="left: 689px; top: 469px; width: 96px; height: 91px; position: absolute">
+<img src="images/robo1.svg" style="left: 597px; top: 404px; width: 120px; height: 191px; position: absolute">
+<!--img src="images/robo1.svg" style="left: 597px; top: 317px; width: 176px; height: 276px; position: absolute"-->
+<span style="font-family: 'CP Font'; left: 363px; top: 37px; width: 640px; height: 39px; color: #409999; font-size: 128px; text-align: center; position: absolute">失敗！</span>
+<span style="font-family: 'keifont'; left: 400px; top: 185px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"><span id="p7t1">1</span>G獲得した！</span>
+<span id="p7t2" style="font-family: 'keifont'; left: 400px; top: 245px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"></span>
+<span style="font-family: 'keifont'; left: 438px; top: 639px; width: 500px; height: 77px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">もう一度同じロボットを騙しますか？</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p7b1" style="font-family: 'CP Font'; left: 508px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">やり直す</span>
+<span id="p7b2" style="font-family: 'CP Font'; left: 708px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">次へ</span>
+<span id="p7b3" style="font-family: 'CP Font'; left: 1008px; top: 634px; width: 160px; height: 92px; color: #ffffff; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #00acee; border: solid #ffffff; border-radius: 10px; cursor: pointer">Twitterで共有</span>
+</div>
+
+<!-- まったく騙せなかった 0G -->
+<div class="pages" id="p8" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate_bw.svg" style="left: 187px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/robo1.svg" style="left: 597px; top: 314px; width: 176px; height: 279px; position: absolute">
+<span style="font-family: 'CP Font'; left: 363px; top: 37px; width: 640px; height: 39px; color: #409999; font-size: 128px; text-align: center; position: absolute">大失敗!!</span>
+<span style="font-family: 'keifont'; left: 400px; top: 185px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"><span id="p8t1">0</span>G獲得した！</span>
+<span id="p8t2" style="font-family: 'keifont'; left: 400px; top: 245px; width: 571px; height: 53px; color: #ffffff; font-size: 30px; text-align: center; position: absolute"></span>
+<span style="font-family: 'keifont'; left: 438px; top: 639px; width: 500px; height: 77px; color: #ffffff; font-size: 30px; text-align: center; position: absolute">もう一度同じロボットを騙しますか？</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p8b1" style="font-family: 'CP Font'; left: 508px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">やり直す</span>
+<span id="p8b2" style="font-family: 'CP Font'; left: 708px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">次へ</span>
+<span id="p8b3" style="font-family: 'CP Font'; left: 1008px; top: 634px; width: 160px; height: 92px; color: #ffffff; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #00acee; border: solid #ffffff; border-radius: 10px; cursor: pointer">Twitterで共有</span>
+</div>
+
+<!-- リーダーボード -->
+<div class="pages" id="p99" style="width: 100%; height: 100%; position: relative">
+<img src="images/gate_bw.svg" style="left: 187px; top: 0px; width: 995px; height: 768px; position: absolute">
+<img src="images/treasure.svg" style="left: 405px; top: 30px; width: 96px; height: 91px; position: absolute">
+<img src="images/treasure.svg" style="left: 865px; top: 30px; width: 96px; height: 91px; position: absolute; transform: scale(-1, 1)">
+<span style="font-family: 'CP Font'; left: 283px; top: 37px; width: 800px; height: 39px; color: #f5df04; font-size: 64px; text-align: center; position: absolute">ランキング</span>
+<span style="font-family: 'keifont'; left: 40px; top: 130px; width: 1286px; height: 53px; color: #ffff10; font-size: 80px; text-align: center; position: absolute">1st <span id="p99t1a"></span>  <span id="p99t1b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 220px; width: 1286px; height: 53px; color: #f0f0ff; font-size: 64px; text-align: center; position: absolute">2nd <span id="p99t2a"></span>  <span id="p99t2b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 290px; width: 1286px; height: 53px; color: #ff6666; font-size: 56px; text-align: center; position: absolute">3rd <span id="p99t3a"></span>  <span id="p99t3b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 360px; width: 1286px; height: 53px; color: #66cc66; font-size: 40px; text-align: center; position: absolute">4th <span id="p99t4a"></span>  <span id="p99t4b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 410px; width: 1286px; height: 53px; color: #66cc66; font-size: 40px; text-align: center; position: absolute">5th <span id="p99t5a"></span>  <span id="p99t5b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 460px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">6th <span id="p99t6a"></span>  <span id="p99t6b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 500px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">7th <span id="p99t7a"></span>  <span id="p99t7b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 540px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">8th <span id="p99t8a"></span>  <span id="p99t8b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 580px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">9th .<span id="p99t9a"></span>  <span id="p99t9b">0</span>G</span>
+<span style="font-family: 'keifont'; left: 40px; top: 620px; width: 1286px; height: 53px; color: #409999; font-size: 32px; text-align: center; position: absolute">10th <span id="p99t0a"></span>  <span id="p99t0b">0</span>G</span>
+<span style="left: 0; right: 0; width: 100%; height: 100%; position: absolute"></span>
+<span id="p99b1" style="font-family: 'CP Font'; left: 603px; top: 680px; width: 160px; height: 46px; color: #f5df04; font-size: 30px; text-align: center; position: absolute; display: flex; align-items: center; justify-content: center; background-color: #795c34; border: solid #ffffff; border-radius: 10px; cursor: pointer">タイトル</span>
+</div>
+
+</div>
+</div>
+</div>
+</body>
+</html>
